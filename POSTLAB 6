@@ -1,0 +1,179 @@
+#pragma config FOSC = INTRC_NOCLKOUT// Oscillator Selection bits (INTOSCIO oscillator: I/O function on RA6/OSC2/CLKOUT pin, I/O function on RA7/OSC1/CLKIN)
+#pragma config WDTE = OFF       // Watchdog Timer Enable bit (WDT disabled and can be enabled by SWDTEN bit of the WDTCON register)
+#pragma config PWRTE = OFF      // Power-up Timer Enable bit (PWRT disabled)
+#pragma config MCLRE = OFF      // RE3/MCLR pin function select bit (RE3/MCLR pin function is digital input, MCLR internally tied to VDD)
+#pragma config CP = OFF         // Code Protection bit (Program memory code protection is disabled)
+#pragma config CPD = OFF        // Data Code Protection bit (Data memory code protection is disabled)
+#pragma config BOREN = OFF      // Brown Out Reset Selection bits (BOR disabled)
+#pragma config IESO = OFF       // Internal External Switchover bit (Internal/External Switchover mode is disabled)
+#pragma config FCMEN = OFF      // Fail-Safe Clock Monitor Enabled bit (Fail-Safe Clock Monitor is disabled)
+#pragma config LVP = OFF        // Low Voltage Programming Enable bit (RB3 pin has digital I/O, HV on MCLR must be used for programming)
+// CONFIG2
+#pragma config BOR4V = BOR40V   // Brown-out Reset Selection bit (Brown-out Reset set to 4.0V)
+#pragma config WRT = OFF        // Flash Program Memory Self Write Enable bits (Write protection off)
+
+#include <xc.h>
+#define _tmr0_value 6 //VALOR A CARGAR AL TIMER 0 para lograr interrupciones cada 10 micro segundos
+#define _XTAL_FREQ 4000000//frecuencia de 4 MHz
+#include <stdint.h>
+
+int display_adc;
+int voltaje_adc;
+int flags;
+
+
+uint8_t centenas;
+uint8_t decenas;
+uint8_t unidades;
+uint8_t residuo;
+uint8_t valor_display [3];
+
+uint8_t tabla[16] = {
+    0b11000000, //0
+    0b11111001, //1
+    0b10100100, //2
+    0b10110000, //3
+    0b10011001, //4
+    0b10010010,//5
+    0b10000010, //6
+    0b11111000, //7
+    0b10000000, //8
+    0b10010000, //9
+    0b10001000, //A
+    0b10000011, //B
+    0b11000110, //C
+    0b10100001, //D
+    0b10000110,
+    0b10001110 //F
+        
+};
+
+
+
+void __interrupt() isr (void){
+    if (T0IF){ //SI LA BANDERA DE INTERRUPCIONES DEL TIMER 0 ESTÁ ENCENDIDA 
+        if (flags == 0)
+        {
+            PORTC = valor_display[2];
+            PORTD = 0b00000001;
+            flags = 1;
+        }
+        else if (flags == 1)
+        {
+            PORTC = valor_display[1];
+            PORTD = 0b00000010;
+            flags = 2;
+        }
+        else if (flags == 2)
+        {
+            PORTC = valor_display[0];
+            PORTD = 0b00000100;
+            flags = 0;
+        }
+        T0IF = 0; //LIMPIAR LA BANDEAR
+        TMR0 = _tmr0_value; //CARGAR EL VALOR AL TIMER 0
+    }
+    
+    if (ADIF)
+    {
+        uint16_t adc = (ADRESH<<8) | ADRESL;//REALIZA UN OR, Y CORRE LOS BITS 8 POSICIONES
+        if (ADCON0bits.CHS == 0b0000) //SI ES EL CANAL 0, MANDAR A LOS DISPLYS
+        {
+            display_adc = (char)(adc>>2);
+        }
+        else //SI ES OTRO CANAL, MANDAR AL PUERTO B
+        {
+            PORTB = (char)(adc>>2);//DE LOS 10 BITS QUE TIENE LA VARIABLE, LOS CORRE 2 VECES PARA TENER UNA VARIABLE DE 8 BITS            
+        }
+        ADIF = 0;
+    }
+    
+}
+void setup(void);
+void unidades_c(int valor);
+
+void main(void){
+    setup();//LLAMADA A VARIABLE DE CONFIGURACIÓN
+    ADCON0bits.GO = 1; //TRANSFORMACIÓN A ADC
+    while(1){  
+       voltaje_adc = (int)((display_adc * (float)5/255) * 100) ;
+       unidades_c(voltaje_adc);
+       
+       valor_display[0] = tabla[unidades];
+       valor_display[1] = tabla[decenas];
+       valor_display[2] = tabla[centenas];
+        
+        
+       if(ADCON0bits.GO == 0){ //CAMBIO DE CANALES ANTES QUE SE EJECUTE LA CONVERSIÓN
+           if(ADCON0bits.CHS == 0b0000) //SI ESTÁ EN EL CANAL 0 
+               ADCON0bits.CHS = 0b0001;//CAMBIAR AL CANAL 1
+           else
+               ADCON0bits.CHS = 0b0000; //SI ESTÁ EN EL CANAL 1, PASAR AL 0
+           __delay_ms(10);//LLAMA UN PEQUEÑO DELAY
+            ADCON0bits.GO = 1; //TRANSFORMACIÓN A ADC
+       }
+        
+    }
+    return;
+}
+void setup(void){
+    ANSEL = 0b00000011;
+    ANSELH = 0;
+ 
+    TRISA = 0b11111111; //los primeros dos pines del puerto A como entradas
+    TRISB = 0;
+    TRISC = 0;
+    TRISD = 0; //todos los pines del puerto B, C y D como salidas
+    TRISE = 0;
+    
+    //LIMPIEZA DE PUERTOS
+    PORTA = 0; 
+    PORTB = 0;
+    PORTC = 0;
+    PORTD = 0;
+    PORTE = 0;
+    //FIN DE LA LIMPIEZA DE PUERTOS
+   
+    //CONFIGURACIÓN DEL TIMER 0-----------------------------------------
+    OSCCONbits.IRCF = 0b110; //4Mhz
+    OSCCONbits.SCS = 1;
+    
+    OPTION_REGbits.T0CS =0;
+    OPTION_REGbits.PSA = 0;
+    OPTION_REGbits.PS = 0b001;//PRESCALER DE 1:4
+    TMR0 = _tmr0_value;//SE CARGA EL VALOR AL TIMER 0
+    //FIN DE LA CONFIGURACIÓN DEL TIMER 0--------------------------------
+    
+    //CONFIGURACIÓN DE LAS INTERRUPCIONES---------------------------------
+    INTCONbits.T0IF = 0; //SE LIMPIA LA BANDERA DEL TIMER 0
+    INTCONbits.T0IE = 1; //SE HABILITA LA INTERRUPCIÓN DEL TIMER 0
+    INTCONbits.GIE = 1; //SE HABILITAN LAS INTERRUPCIONES GLOBALES
+    //FIN DE LA CONFIGURACIÓN DE LAS INTERRUPCIONES
+    
+    ADCON0bits.ADCS = 0b10;//FRECUENCIA PARA MHZ
+    ADCON0bits.CHS = 0b0000;//SELECCIÓN DEL CANAL AN0, PIN RA0
+    __delay_ms(1);
+    
+    ADCON1bits.ADFM = 1;//JUSTIFICADO A LA DERECHA
+    ADCON1bits.VCFG0 = 0;//VOLTAJE DE REFERENCIA 0 COMO VDD
+    ADCON1bits.VCFG1 = 0;//VOLTAJE DE REFERECNIA 1 COMO VSS
+    ADCON0bits.ADON = 1;//SE HABILITA EL ADC
+    __delay_ms(50);
+    PIE1bits.ADIE = 1; //interrupción del ADC activada
+    ADIF = 0;//LIMPIA LA BANDERA 
+   
+    //FIN DE LA CONFIGURACION DEL ADC
+    return;
+}
+
+void unidades_c(int valor)
+{
+    centenas = (uint8_t)(valor / 100);
+    residuo = valor % 100;
+    
+    decenas = residuo /10;
+    residuo = residuo %10;
+    
+    unidades = residuo;
+    return;
+}
